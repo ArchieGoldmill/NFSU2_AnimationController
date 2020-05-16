@@ -1,4 +1,0 @@
-﻿  dllmain.cpp
-E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\AnimationController\dllmain.cpp(143): warning C4305: '=': truncation from 'double' to 'float'
-E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\AnimationController\dllmain.cpp(246): warning C4309: 'argument': truncation of constant value
-  AnimationController.vcxproj -> E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\Debug\AnimationController.asi
