@@ -1,0 +1,8 @@
+﻿  dllmain.cpp
+E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\AnimationController\dllmain.cpp(143): warning C4305: '=': truncation from 'double' to 'float'
+E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\AnimationController\dllmain.cpp(246): warning C4309: 'argument': truncation of constant value
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+  All 939 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  AnimationController.vcxproj -> E:\Programming\NFS U2\NFSU2_AnimationController\AnimationController\Release\AnimationController.asi

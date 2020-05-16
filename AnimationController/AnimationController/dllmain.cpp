@@ -1,22 +1,22 @@
-﻿#include "stdafx.h"
-#include "stdio.h"
-#include <windows.h>
-#include "..\includes\injector\injector.hpp"
-#include <cstdint>
-#include "..\includes\IniReader.h"
-#include <d3d9.h>
+// dllmain.cpp : Defines the entry point for the DLL application.
+#include "pch.h"
+#include "injector/injector.hpp"
+#include "ini/IniReader.h"
 
-using namespace std;
+CIniReader iniReader("AnimationController.ini");
 
-DWORD WINAPI Thing(LPVOID);
-int ThreadDelay = 1;
-bool IsOnFocus;
-char* iniFile = "AnimationController.ini";
+char hk_toggleHood, hk_toggleTrunk, hk_toggleDoors, hk_enableHood, hk_enableTrunk;
+bool FixEngineTextureInRaces, ShowTrunkComponentsInRaces, ALwaysEnableTrunk, AlwaysShowEngineModel, HideHood = false;
+float animationSpeed;
 
-DWORD GameState;
-HWND windowHandle;
+enum CarAnimState
+{
+	Opened = 0,
+	Closed = 1,
+	Animating = 2
+};
 
-enum AnimationPart
+enum CarAnimLocation
 {
 	Hood = 0,
 	Trunk = 1,
@@ -24,319 +24,264 @@ enum AnimationPart
 	RightDoor = 3
 };
 
-int blank[100];
-
-char hk_toggleHood, hk_toggleTrunk, hk_toggleDoors, hk_enableHood, hk_enableTrunk;
-bool FixEngineInRaces, EnableTrunkContentsInRaces, RemoveBlackCoverUnderHood;
-
-void* GetAbsolutePtr(int* offsets, int len)
+struct PartAnimation
 {
-	void* cur = 0;
+	PartAnimation* next;
+	PartAnimation* prev;
+	float speed;
+	CarAnimLocation part;
+	CarAnimState state;
+};
 
-	for (int i = 0; i < len - 1; i++)
+int* GameState = (int*)0x8654A4;
+bool* IsNoFocus = (bool*)0x8709E0;
+
+float* TrunkClosedNeon = (float*)0x00615C04;
+float* TrunkClosed = (float*)0x00620C02;
+
+float* EngineClosed = (float*)0x00620BC9;
+
+void* TheCarLoader = (void*)0x008A3288;
+int* PlayersByNumber = (int*)0x008900AC;
+int** CarPartsScenesList = (int**)0x00827C9C;
+auto Game_LoadCareerCarPartsAnims = (int(__fastcall*)(void*))0x00633A00;
+auto Game_TriggerCarPartAnimation = (int(__cdecl*)(int, CarAnimLocation part, bool direction, float speed))0x0061F820;
+auto Game_FEDoCarPartAnimNow = (int(__cdecl*)(CarAnimLocation part, bool direction, float speed))0x004C1860;
+
+void LoadCareerCarPartsAnims()
+{
+	if (*GameState == 6)
 	{
-		cur = (void*)(*(int*)((int)cur + offsets[i]));
+		Game_LoadCareerCarPartsAnims(TheCarLoader);
 	}
-
-	cur = (void*)((int)cur + offsets[len - 1]);
-
-	return cur;
 }
 
-bool IsCarDataLoaded()
+void TriggerCarPartAnimation(CarAnimLocation part, bool direction, float speed)
 {
-	int val = *((int*)0x00827C9C);
-	return val != 0x00827C9C;
+	if (*GameState == 3)
+	{
+		Game_FEDoCarPartAnimNow(part, direction, speed);
+	}
+	if (*GameState == 6)
+	{
+		int val = *(int*)(*(int*)(*PlayersByNumber + 4) + 0x554);
+		Game_TriggerCarPartAnimation(val, part, direction, speed);
+	}
 }
 
-void(__cdecl* Game_LoadCarData)() = (void(__cdecl*)())0x00633A00;
-void LoadCarData() {
-	if (IsCarDataLoaded())
-	{
-		return;
-	}
-
-	__asm {
-		mov ECX, 0x008A3288
-		mov EDI, 0x00799F1C
-		mov ESI, blank
-		call Game_LoadCarData
-	}
-
-	Sleep(300);
-}
-
-void(__cdecl* Game_ExecuteAnimation)(int, int, int, int, float) = (void(__cdecl*)(int, int, int, int, float))0x00433E20;
-void ExecuteAnimation(AnimationPart part, int animation, int direction, float speed)
+CarAnimState GetPartState(CarAnimLocation part)
 {
-	if (!IsCarDataLoaded())
+	PartAnimation** CarPartsScenesListHead = (PartAnimation * *)(*CarPartsScenesList + 2);
+	if ((int)CarPartsScenesListHead != (int)* CarPartsScenesListHead)
 	{
-		return;
-	}
+		PartAnimation* cur = *CarPartsScenesListHead;
 
-	int ptr[3] = { 0x008A7110, 0x8, 0x1F4 };
-	int val = *(int*)GetAbsolutePtr(ptr, 3);
-
-	Game_ExecuteAnimation(val, part, direction, animation, speed);
-}
-
-void SetPartState(AnimationPart part, int state)
-{
-	int ptr[2] = { 0x00827C9C,0x8 };
-	int* baseAdr = (int*)GetAbsolutePtr(ptr, 2);
-
-	if ((int)baseAdr == *baseAdr)
-	{
-		return;
-	}
-
-	vector<int> addr;
-	addr.push_back(0x00827C9C);
-	addr.push_back(0x8);
-	addr.push_back(0);
-
-	while (true)
-	{
-		int* partDataAddr = (int*)GetAbsolutePtr(&addr[0], addr.size());
-
-		int p = *((int*)((int)partDataAddr + 0xC));
-		if (p == (int)part)
+		while (cur->next != *CarPartsScenesListHead)
 		{
-			*((int*)((int)partDataAddr + 0x10)) = state;
-			return;
-		}
-		else
-		{
-			addr.push_back(0);
-
-			if ((int*)GetAbsolutePtr(&addr[0], addr.size()) == baseAdr)
+			if (cur->part == part)
 			{
+				if (cur->state != CarAnimState::Closed && cur->state != CarAnimState::Opened)
+				{
+					return CarAnimState::Animating;
+				}
+
+				return cur->state;
+
 				break;
 			}
-		}
-	}
-}
 
-int GetPartState(AnimationPart part)
-{
-	int ptr[2] = { 0x00827C9C,0x8 };
-	int* baseAdr = (int*)GetAbsolutePtr(ptr, 2);
-
-	if ((int)baseAdr == *baseAdr)
-	{
-		return 0;
-	}
-
-	vector<int> addr;
-	addr.push_back(0x00827C9C);
-	addr.push_back(0x8);
-	addr.push_back(0);
-
-	while (true)
-	{
-		int* partDataAddr = (int*)GetAbsolutePtr(&addr[0], addr.size());
-
-		int p = *((int*)((int)partDataAddr + 0xC));
-		if (p == (int)part)
-		{
-			return *((int*)((int)partDataAddr + 0x10));
-		}
-		else
-		{
-			addr.push_back(0);
-
-			if ((int*)GetAbsolutePtr(&addr[0], addr.size()) == baseAdr)
-			{
-				break;
-			}
+			cur = cur->next;
 		}
 	}
 
-	return 0;
+	return CarAnimState::Closed;
 }
 
-void LoadPart(AnimationPart part, int animation = 0)
+void TriggerCarPartAnimation(CarAnimLocation part)
 {
-	int state = GetPartState(part);
+	LoadCareerCarPartsAnims();	
 
-	ExecuteAnimation(part, animation, 0, -1.0);
-}
-
-void EnablePart(AnimationPart part)
-{
-	LoadPart(part);
-
-	int state = GetPartState(part);
-	if (state == -1)
+	CarAnimState state = GetPartState(part);
+	if (state == CarAnimState::Animating)
 	{
-		SetPartState(part, 1);
 		return;
 	}
 
-	if (state != 0)
+	bool direction = false;
+	if (state == CarAnimState::Closed)
 	{
-		SetPartState(part, 0);
+		direction = true;
 	}
 
-	Sleep(10);
-
-	SetPartState(part, -1);
+	TriggerCarPartAnimation(part, direction, animationSpeed);
+	if (part == CarAnimLocation::LeftDoor)
+	{
+		TriggerCarPartAnimation(CarAnimLocation::RightDoor, direction, animationSpeed);
+	}
 }
 
-void TogglePart(AnimationPart part, int animation = 0)
+void CheckKeyAndTrigger(char hotKey, CarAnimLocation part)
 {
-	int dir = 0;
-
-	int state = GetPartState(part);
-
-	if (state == -1)
+	if (GetAsyncKeyState(hotKey))
 	{
-		SetPartState(part, 1);
-		dir = 1;
+		if (hotKey == hk_toggleHood)
+		{
+			HideHood = false;
+		}
+
+		TriggerCarPartAnimation(part);
+
+		while ((GetAsyncKeyState(hotKey) & 0x8000) > 0) { Sleep(0); }
+	}
+}
+
+void ToggleTrunk(bool enabled)
+{
+	if (enabled)
+	{
+		*TrunkClosedNeon = 1.0;
+		*TrunkClosed = 0.7;
+		injector::MakeNOP(0x00615BF8, 6, true); // Enables neon in races
 	}
 	else
 	{
-		dir = state;
+		*TrunkClosedNeon = 0.0;
+		*TrunkClosed = 0.0;
 	}
-
-	// Animation
-	CIniReader iniReader(iniFile);
-	float animationSpeed = iniReader.ReadFloat("Animation", "AnimationSpeed", 1.0);
-	if (animationSpeed <= 0) {
-		animationSpeed = 0.1;
-	}
-
-	if (animationSpeed > 10) {
-		animationSpeed = 10;
-	}
-
-	ExecuteAnimation(part, animation, dir, animationSpeed);
 }
 
+DWORD HoodRenderCave1 = 0x006233AB;
+void __declspec(naked) HoodRenderCave()
+{
+	__asm
+	{
+		cmp HideHood, 1;
+		jne HoodRenderDefault;
+
+		mov edx, [esp + 0x0000030C];
+		xor edx, 1;
+		jmp HoodRenderCave1;
+
+	HoodRenderDefault:
+		mov edx, 1;
+		jmp HoodRenderCave1;
+	}
+}
+
+DWORD HoodUnderRender1 = 0x006233D0;
+void __declspec(naked) HoodUnderRenderCave()
+{
+	__asm
+	{
+		cmp HideHood, 1;
+		jne HoodUnderRenderDefault;
+		mov edx, 0;
+		jmp HoodUnderRender1;
+
+	HoodUnderRenderDefault:
+		mov edx, [esp + 0x0000030C];
+		jmp HoodUnderRender1;
+	}
+}
 
 DWORD WINAPI Thing(LPVOID)
 {
 	while (true)
 	{
-		Sleep(ThreadDelay);
-
-		GameState = *(DWORD*)0x8654A4;
-		windowHandle = *(HWND*)0x870990;
-		IsOnFocus = !(*(bool*)0x8709E0);
-
-		if ((GetAsyncKeyState(hk_toggleHood) & 1) && IsOnFocus && (GameState == 3 || GameState == 6))
+		Sleep(1000 / 30);
+		if (*IsNoFocus && !(*GameState == 3 || *GameState == 6))
 		{
-			// This need to be done after game fully loads, because working with bynamic memmory
-			if (RemoveBlackCoverUnderHood) {
-				int ptr = *((int*)0x008A1CB0);
-				*((int*)(ptr + 0x171)) = 0x49;
-				*((int*)(ptr + 0x185)) = 0x49;
-				*((int*)(ptr + 0x199)) = 0x49;
-			}
-
-			LoadCarData();
-
-			CIniReader iniReader(iniFile);
-			int hoodStyle = iniReader.ReadInteger("Animation", "HoodStyle", 0); // 0 - Default, 1 - Front, 2 - Sides, 3 - Dual Front
-			TogglePart(AnimationPart::Hood, hoodStyle);
-
-			while ((GetAsyncKeyState(hk_toggleHood) & 0x8000) > 0) { Sleep(0); }
+			continue;
 		}
 
-		if ((GetAsyncKeyState(hk_enableHood) & 1) && IsOnFocus && (GameState == 3 || GameState == 6))
+		CheckKeyAndTrigger(hk_toggleHood, CarAnimLocation::Hood);
+		CheckKeyAndTrigger(hk_toggleTrunk, CarAnimLocation::Trunk);
+		CheckKeyAndTrigger(hk_toggleDoors, CarAnimLocation::LeftDoor);
+
+		if (GetAsyncKeyState(hk_enableTrunk))
 		{
-			LoadCarData();
+			ALwaysEnableTrunk = !ALwaysEnableTrunk;
+			ToggleTrunk(ALwaysEnableTrunk);
 
-			EnablePart(AnimationPart::Hood);
-
-			while ((GetAsyncKeyState(hk_enableHood) & 0x8000) > 0) { Sleep(0); }
-		}
-
-		if ((GetAsyncKeyState(hk_toggleTrunk) & 1) && IsOnFocus && (GameState == 3 || GameState == 6))
-		{
-			LoadCarData();
-
-			CIniReader iniReader(iniFile);
-			int trunkStyle = iniReader.ReadInteger("Animation", "TrunkStyle", 0);
-			TogglePart(AnimationPart::Trunk, trunkStyle);
-
-			while ((GetAsyncKeyState(hk_toggleTrunk) & 0x8000) > 0) { Sleep(0); }
-		}
-
-		if ((GetAsyncKeyState(hk_enableTrunk) & 1) && IsOnFocus && (GameState == 3 || GameState == 6))
-		{
-			LoadCarData();
-
-			EnablePart(AnimationPart::Trunk);
+			iniReader.WriteInteger("General", "ALwaysEnableTrunk", ALwaysEnableTrunk);
 
 			while ((GetAsyncKeyState(hk_enableTrunk) & 0x8000) > 0) { Sleep(0); }
 		}
 
-		if ((GetAsyncKeyState(hk_toggleDoors) & 1) && IsOnFocus && (GameState == 3 || GameState == 6))
+		if (GetAsyncKeyState(hk_enableHood))
 		{
-			LoadCarData();
-
-			CIniReader iniReader(iniFile);
-			int doorsStyle = iniReader.ReadInteger("Animation", "DoorsStyle", 0); // 0 - Default, 1 - Scissors, 2- Suicide
-			if (doorsStyle > 6 || doorsStyle < 0)
+			if (!(!HideHood && GetPartState(CarAnimLocation::Hood) == CarAnimState::Opened))
 			{
-				doorsStyle = 0;
+				TriggerCarPartAnimation(CarAnimLocation::Hood);
 			}
 
-			TogglePart(AnimationPart::LeftDoor, doorsStyle);
-			TogglePart(AnimationPart::RightDoor, doorsStyle);
+			HideHood = true;			
 
-			while ((GetAsyncKeyState(hk_toggleDoors) & 0x8000) > 0) { Sleep(0); }
+			while ((GetAsyncKeyState(hk_enableHood) & 0x8000) > 0) { Sleep(0); }
 		}
 	}
 }
 
 void Init()
 {
-	CIniReader iniReader(iniFile);
-
 	//General
-	FixEngineInRaces = iniReader.ReadBoolean("General", "FixEngineInRaces", true);
-	EnableTrunkContentsInRaces = iniReader.ReadBoolean("General", "EnableTrunkContentsInRaces", true);
-	RemoveBlackCoverUnderHood = iniReader.ReadBoolean("General", "RemoveBlackCoverUnderHood", false);
+	FixEngineTextureInRaces = iniReader.ReadInteger("General", "FixEngineTextureInRaces", 1);
+	ShowTrunkComponentsInRaces = iniReader.ReadInteger("General", "ShowTrunkComponentsInRaces", 1);
+	ALwaysEnableTrunk = iniReader.ReadInteger("General", "ALwaysEnableTrunk", 1);
+	AlwaysShowEngineModel = iniReader.ReadInteger("General", "AlwaysShowEngineModel", 0);
 
 	// Hotkeys
-	hk_toggleHood = toupper(iniReader.ReadString("Hotkeys", "ToggleHood", "U")[0]);
-	hk_enableHood = toupper(iniReader.ReadString("Hotkeys", "EnableHood", "J")[0]);
+	hk_toggleHood = toupper(iniReader.ReadString("Hotkeys", "ToggleHood", "1")[0]);
+	hk_enableHood = toupper(iniReader.ReadString("Hotkeys", "HideHood", "2")[0]);
 
-	hk_toggleTrunk = toupper(iniReader.ReadString("Hotkeys", "ToggleTrunk", "I")[0]);
-	hk_enableTrunk = toupper(iniReader.ReadString("Hotkeys", "EnableTrunk", "K")[0]);
+	hk_toggleTrunk = toupper(iniReader.ReadString("Hotkeys", "ToggleTrunk", "3")[0]);
+	hk_enableTrunk = toupper(iniReader.ReadString("Hotkeys", "EnableTrunk", "4")[0]);
 
-	hk_toggleDoors = toupper(iniReader.ReadString("Hotkeys", "ToggleDoors", "O")[0]);
+	hk_toggleDoors = toupper(iniReader.ReadString("Hotkeys", "ToggleDoors", "5")[0]);
 
-	if (FixEngineInRaces) {
-		*((char*)0x0057F6BF) = 0xB8;
-		*((int*)0x0057F6C0) = 0;
+	animationSpeed = iniReader.ReadFloat("General", "AnimationSpeed", 1.0);
+
+	if (ShowTrunkComponentsInRaces)
+	{
+		injector::WriteMemory<char>(0x00630C27, 0xEB, true);
 	}
 
-	if (EnableTrunkContentsInRaces) {
-		injector::MakeNOP(0x00630C29, 5, true);
+	if (FixEngineTextureInRaces)
+	{
+		injector::WriteMemory<int>(0x0057F6BF, 0xB8, true);
 	}
 
-	// Fix hood types
-	injector::MakeNOP(0x00433B51, 6);
-	*((char*)0x00433B51) = 0x75;
-	*((char*)0x00433B52) = 0xA1;
+	if (ALwaysEnableTrunk)
+	{
+		ToggleTrunk(true);
+	}
+
+	if (AlwaysShowEngineModel)
+	{
+		injector::MakeNOP(0x006304CD, 6, true);
+		*EngineClosed = 1.0;
+	}
+
+	injector::MakeJMP(0x006233A6, HoodRenderCave, true);
+	injector::MakeJMP(0x006233C9, HoodUnderRenderCave, true);
 
 	CreateThread(0, 0, (LPTHREAD_START_ROUTINE)& Thing, NULL, 0, NULL);
 }
 
-
-BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*lpReserved*/)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
-	if (reason == DLL_PROCESS_ATTACH)
+	switch (ul_reason_for_call)
+	{
+	case DLL_PROCESS_ATTACH:
 	{
 		uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
 		IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)(base);
 		IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
 
 		if ((base + nt->OptionalHeader.AddressOfEntryPoint + (0x400000 - base)) == 0x75BCC7) // Check if .exe file is compatible - Thanks to thelink2012 and MWisBest
+		{
 			Init();
+		}
 
 		else
 		{
@@ -344,6 +289,14 @@ BOOL APIENTRY DllMain(HMODULE /*hModule*/, DWORD reason, LPVOID /*lpReserved*/)
 			return FALSE;
 		}
 	}
+	break;
+	case DLL_THREAD_ATTACH:
+		break;
+	case DLL_THREAD_DETACH:
+		break;
+	case DLL_PROCESS_DETACH:
+		break;
+	}
 	return TRUE;
-
 }
+
